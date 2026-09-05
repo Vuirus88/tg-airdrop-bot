@@ -2,6 +2,7 @@
 Central configuration, loaded from environment variables (.env file).
 """
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -54,9 +55,22 @@ def _database_url() -> str:
     """Accept Neon’s standard PostgreSQL URL with SQLAlchemy’s async driver."""
     value = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./airdrop_bot.db").strip()
     if value.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + value.removeprefix("postgresql://")
-    if value.startswith("postgres://"):
-        return "postgresql+asyncpg://" + value.removeprefix("postgres://")
+        value = "postgresql+asyncpg://" + value.removeprefix("postgresql://")
+    elif value.startswith("postgres://"):
+        value = "postgresql+asyncpg://" + value.removeprefix("postgres://")
+    if value.startswith("postgresql+asyncpg://"):
+        parts = urlsplit(value)
+        parameters = parse_qsl(parts.query, keep_blank_values=True)
+        sslmode = next((item[1] for item in parameters if item[0] == "sslmode"), None)
+        # SQLAlchemy passes URL query parameters to asyncpg as keyword args.
+        # ``sslmode`` and Neon’s optional ``channel_binding`` are libpq-only;
+        # asyncpg expects the SSL setting under ``ssl`` instead.
+        parameters = [
+            item for item in parameters if item[0] not in {"sslmode", "channel_binding"}
+        ]
+        if sslmode and not any(item[0] == "ssl" for item in parameters):
+            parameters.append(("ssl", sslmode))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(parameters), parts.fragment))
     return value
 
 
